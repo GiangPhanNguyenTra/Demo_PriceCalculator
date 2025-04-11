@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PoC Tính Giá Cước</title>
+    <link rel="stylesheet" />
+    <style>
+      body {
+        font-family: sans-serif;
+        line-height: 1.6;
+        padding: 20px;
+      }
+      .container {
+        max-width: 1200px;
+        margin: auto;
+      }
+      .section {
+        background-color: #f4f4f4;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 5px;
+      }
+      label {
+        display: inline-block;
+        margin-right: 10px;
+        margin-bottom: 5px;
+        min-width: 120px;
+        vertical-align: middle;
+      }
+      input[type="number"],
+      select {
+        padding: 8px;
+        margin-right: 10px;
+        margin-bottom: 10px;
+        min-width: 100px;
+        vertical-align: middle;
+      }
+      button {
+        padding: 10px 15px;
+        cursor: pointer;
+        background-color: #3498db;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        vertical-align: middle;
+      }
+      button:hover {
+        background-color: #2980b9;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+        font-size: 0.9em;
+      } /* Giảm font size chút */
+      th {
+        background-color: #e4e4e4;
+      }
+      #bulk-stats,
+      #single-result {
+        margin-top: 15px;
+        background-color: #e0f7fa;
+        padding: 10px;
+        border: 1px solid #b2ebf2;
+        border-radius: 4px;
+      }
+      .error {
+        color: red;
+        font-weight: bold;
+      }
+      .loader {
+        border: 4px solid #f3f3f3;
+        border-radius: 50%;
+        border-top: 4px solid #3498db;
+        width: 20px;
+        height: 20px;
+        animation: spin 1s linear infinite;
+        display: none;
+        margin-left: 10px;
+        vertical-align: middle;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+      pre {
+        background-color: #eee;
+        padding: 5px;
+        border-radius: 3px;
+        font-size: 0.9em;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .factor-level {
+        margin-bottom: 12px;
+      }
+      .factor-level label {
+        min-width: 140px;
+      } /* Tăng độ rộng label yếu tố */
+      .factor-level input[type="number"] {
+        width: 60px;
+        text-align: center;
+      } /* Input level nhỏ hơn */
+      .factor-level span {
+        font-size: 0.85em;
+        color: #555;
+        margin-left: 5px;
+      } /* Chú thích nhỏ */
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>PoC Demo: Tính Giá Cước Dưới 3s</h1>
+
+      <div class="section">
+        <h2>Tham Số Tính Giá Hiện Tại</h2>
+        <p>
+          <strong>Giá mở cửa (Base Fare):</strong> {{ params.base_fare | int |
+          format_price }} VND
+        </p>
+        <p><strong>Giá mỗi KM:</strong></p>
+        <ul>
+          {% for type, price in params.price_per_km.items() %}
+          <li>
+            {{ type.capitalize() }}: {{ price | int | format_price }} VND/km
+          </li>
+          {% endfor %}
+        </ul>
+        <p><strong>Biên độ yếu tố (Min/Max %):</strong></p>
+        <ul>
+          <li>
+            Cung-Cầu: {{ (params.factor_ranges.supply_demand[0]*100) | round(1)
+            }}% / {{ (params.factor_ranges.supply_demand[1]*100) | round(1) }}%
+          </li>
+          <li>
+            Thời tiết: +{{ (params.factor_ranges.weather[0]*100) | round(1) }}%
+            / +{{ (params.factor_ranges.weather[1]*100) | round(1) }}%
+          </li>
+          <li>
+            Tắc đường: +{{ (params.factor_ranges.congestion[0]*100) | round(1)
+            }}% / +{{ (params.factor_ranges.congestion[1]*100) | round(1) }}%
+          </li>
+          <li>
+            Trung thành: {{ (params.factor_ranges.loyalty[0]*100) | round(1) }}%
+            / {{ (params.factor_ranges.loyalty[1]*100) | round(1) }}%
+          </li>
+        </ul>
+        <p>
+          <i
+            >Lưu ý: Với bulk test, mỗi chuyến sẽ có các yếu tố ngẫu nhiên trong
+            khoảng trên. Với single test, bạn chọn mức độ 1-10.</i
+          >
+        </p>
+      </div>
+
+      <hr />
+
+      <div class="section">
+        <h2>Test Hàng Loạt (Bulk Test)</h2>
+        <label for="num_trips">Số lượng chuyến:</label>
+        <input type="number" id="num_trips" value="1000" min="1" max="10000" />
+        <!-- Tăng max lên chút -->
+        <button id="run-bulk-test">Chạy Test Hàng Loạt</button>
+        <div class="loader" id="bulk-loader"></div>
+        <div id="bulk-error" class="error"></div>
+
+        <div id="bulk-stats">
+          <h3>Kết quả Thống Kê:</h3>
+          <p id="stats-content">Chưa chạy test...</p>
+        </div>
+
+        <h3>Kết quả Chi Tiết (Tất cả các chuyến):</h3>
+        <!-- Tăng max-height hoặc bỏ đi nếu muốn hiển thị toàn bộ mà không cuộn -->
+        <div style="max-height: 500px; overflow-y: auto">
+          <table id="bulk-results-table">
+            <thead>
+              <tr>
+                <th>STT</th>
+                <th>Trip ID</th>
+                <th>Loại Xe</th>
+                <th>Khoảng Cách (km)</th>
+                <th>Giá Cơ Bản (VND)</th>
+                <th>Giá Cuối Cùng (VND)</th>
+                <th>Thời gian phản hồi (ms)</th>
+                <th>Lý Do Thay Đổi Giá</th>
+              </tr>
+            </thead>
+            <tbody id="bulk-results-body">
+              <tr>
+                <td colspan="8">Chưa có dữ liệu</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <hr />
+
+      <div class="section">
+        <h2>Test Chuyến Đơn Lẻ (Single Trip Test)</h2>
+        <div>
+          <label for="single_distance">Khoảng cách (km):</label>
+          <input
+            type="number"
+            id="single_distance"
+            value="5.5"
+            step="0.1"
+            min="0.1"
+          />
+        </div>
+        <div>
+          <label for="single_vehicle">Loại xe:</label>
+          <select id="single_vehicle">
+            {% for type in params.vehicle_types %}
+            <option value="{{ type }}">{{ type.capitalize() }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <h3>Chọn Mức Độ Yếu Tố Ảnh Hưởng (1-10):</h3>
+        <div class="factor-level">
+          <label for="single_sd">Cung-Cầu:</label>
+          <input
+            type="number"
+            id="single_sd"
+            value="5"
+            min="1"
+            max="10"
+            step="1"
+          />
+          <span>(1: Nhu cầu thấp nhất, 10: Nhu cầu cao nhất)</span>
+        </div>
+        <div class="factor-level">
+          <label for="single_weather">Thời tiết:</label>
+          <input
+            type="number"
+            id="single_weather"
+            value="1"
+            min="1"
+            max="10"
+            step="1"
+          />
+          <span>(1: Đẹp/Không ảnh hưởng, 10: Xấu nhất)</span>
+        </div>
+        <div class="factor-level">
+          <label for="single_congestion">Tắc đường:</label>
+          <input
+            type="number"
+            id="single_congestion"
+            value="1"
+            min="1"
+            max="10"
+            step="1"
+          />
+          <span>(1: Không tắc, 10: Tắc nhất)</span>
+        </div>
+        <div class="factor-level">
+          <label for="single_loyalty">Trung thành:</label>
+          <input
+            type="number"
+            id="single_loyalty"
+            value="1"
+            min="1"
+            max="10"
+            step="1"
+          />
+          <span>(1: Giảm giá nhiều nhất, 10: Giảm giá ít nhất)</span>
+          <br /><small style="margin-left: 150px"
+            >(Áp dụng nếu giả định là khách hàng TT trong test này)</small
+          >
+        </div>
+
+        <button id="run-single-test">Tính Giá Chuyến Đơn</button>
+        <div class="loader" id="single-loader"></div>
+        <div id="single-error" class="error"></div>
+
+        <div id="single-result">
+          <h3>Kết quả:</h3>
+          <p id="single-result-content">Nhập thông tin và nhấn nút tính giá.</p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const bulkTestBtn = document.getElementById("run-bulk-test");
+      const numTripsInput = document.getElementById("num_trips");
+      const bulkResultsBody = document.getElementById("bulk-results-body");
+      const statsContent = document.getElementById("stats-content");
+      const bulkLoader = document.getElementById("bulk-loader");
+      const bulkError = document.getElementById("bulk-error");
+
+      const singleTestBtn = document.getElementById("run-single-test");
+      const singleDistance = document.getElementById("single_distance");
+      const singleVehicle = document.getElementById("single_vehicle");
+      const singleSd = document.getElementById("single_sd");
+      const singleWeather = document.getElementById("single_weather");
+      const singleCongestion = document.getElementById("single_congestion");
+      const singleLoyalty = document.getElementById("single_loyalty"); // Đọc input loyalty mới
+      const singleResultContent = document.getElementById(
+        "single-result-content"
+      );
+      const singleLoader = document.getElementById("single-loader");
+      const singleError = document.getElementById("single-error");
+
+      // Hàm format tiền tệ Việt Nam
+      function formatPrice(price) {
+        if (typeof price !== "number") return price; // Trả về nguyên gốc nếu không phải số
+        return price.toLocaleString("vi-VN");
+      }
+
+      // Đăng ký bộ lọc Jinja2 trên client-side (nếu cần thiết, nhưng ở đây đã dùng trên server)
+      // Hoặc dùng hàm formatPrice trực tiếp
+
+      // --- Bulk Test ---
+      bulkTestBtn.addEventListener("click", async () => {
+        const numTrips = numTripsInput.value;
+        if (!numTrips || numTrips <= 0) {
+          bulkError.textContent = "Vui lòng nhập số lượng chuyến hợp lệ.";
+          return;
+        }
+
+        bulkLoader.style.display = "inline-block";
+        bulkTestBtn.disabled = true;
+        bulkResultsBody.innerHTML =
+          '<tr><td colspan="8">Đang xử lý...</td></tr>';
+        statsContent.textContent = "Đang tính toán...";
+        bulkError.textContent = "";
+
+        try {
+          const response = await fetch("/calculate_bulk", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: `num_trips=${numTrips}`,
+          });
+
+          if (!response.ok) {
+            const errorData = await response
+              .json()
+              .catch(() => ({ error: `Lỗi HTTP: ${response.status}` }));
+            throw new Error(errorData.error || `Lỗi HTTP: ${response.status}`);
+          }
+
+          const data = await response.json();
+
+          // Display Stats
+          const statsHtml = `
+                    Đã xử lý: <strong>${
+                      data.stats.num_trips
+                    }</strong> chuyến (OK: ${data.stats.processed_ok}, Lỗi: ${
+            data.stats.processed_error
+          })<br>
+                    Tổng thời gian: <strong>${data.stats.total_time_ms.toFixed(
+                      2
+                    )} ms</strong> (${(data.stats.total_time_ms / 1000).toFixed(
+            3
+          )} giây)<br>
+                    Thời gian phản hồi trung bình: <strong>${data.stats.avg_time_ms.toFixed(
+                      4
+                    )} ms</strong><br>
+                    <strong>PoC Kết quả: ${
+                      data.stats.total_time_ms <= 3000
+                        ? '<span style="color:green;">THÀNH CÔNG</span> (Dưới 3 giây)'
+                        : '<span style="color:red;">THẤT BẠI</span> (Vượt quá 3 giây)'
+                    }</strong>
+                 `; // Xóa hiển thị applied_factors
+          statsContent.innerHTML = statsHtml;
+
+          // Display ALL Results Table
+          let resultsHtml = "";
+          if (data.results && data.results.length > 0) {
+            data.results.forEach((res, index) => {
+              resultsHtml += `
+                            <tr>
+                                <td>${index + 1}</td>
+                                <td>${
+                                  res.trip_id
+                                }</td> <!-- Hiển thị ID đầy đủ hơn -->
+                                <td>${res.vehicle_type}</td>
+                                <td>${res.distance}</td>
+                                <td>${formatPrice(res.base_price)}</td>
+                                <td>${formatPrice(res.final_price)}</td>
+                                <td>${res.calc_time_ms.toFixed(2)}</td>
+                                <td>${res.reasons.join(
+                                  "<br>"
+                                )}</td> <!-- Xuống dòng cho dễ đọc -->
+                            </tr>
+                        `;
+            });
+          } else {
+            resultsHtml =
+              '<tr><td colspan="8">Không có kết quả hợp lệ.</td></tr>';
+          }
+          bulkResultsBody.innerHTML = resultsHtml;
+        } catch (error) {
+          console.error("Lỗi khi test hàng loạt:", error);
+          bulkError.textContent = `Đã xảy ra lỗi: ${error.message}`;
+          statsContent.textContent = "Lỗi!";
+          bulkResultsBody.innerHTML =
+            '<tr><td colspan="8">Lỗi khi tải dữ liệu</td></tr>';
+        } finally {
+          bulkLoader.style.display = "none";
+          bulkTestBtn.disabled = false;
+        }
+      });
+
+      // --- Single Trip Test ---
+      singleTestBtn.addEventListener("click", async () => {
+        const distance = singleDistance.value;
+        const vehicleType = singleVehicle.value;
+        const sdLevel = singleSd.value;
+        const weatherLevel = singleWeather.value;
+        const congestionLevel = singleCongestion.value;
+        const loyaltyLevel = singleLoyalty.value; // Đọc giá trị level loyalty
+
+        // Thêm kiểm tra đầu vào cơ bản phía client
+        if (!distance || distance <= 0) {
+          singleError.textContent = "Vui lòng nhập khoảng cách hợp lệ.";
+          return;
+        }
+        if (
+          !sdLevel ||
+          !weatherLevel ||
+          !congestionLevel ||
+          !loyaltyLevel ||
+          sdLevel < 1 ||
+          sdLevel > 10 ||
+          weatherLevel < 1 ||
+          weatherLevel > 10 ||
+          congestionLevel < 1 ||
+          congestionLevel > 10 ||
+          loyaltyLevel < 1 ||
+          loyaltyLevel > 10
+        ) {
+          singleError.textContent = "Mức độ yếu tố phải từ 1 đến 10.";
+          return;
+        }
+
+        singleLoader.style.display = "inline-block";
+        singleTestBtn.disabled = true;
+        singleResultContent.textContent = "Đang tính toán...";
+        singleError.textContent = "";
+
+        try {
+          const response = await fetch("/calculate_single", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            // Gửi các giá trị level lên server
+            body: `distance=${distance}&vehicle_type=${vehicleType}&sd_level=${sdLevel}&weather_level=${weatherLevel}&congestion_level=${congestionLevel}&loyalty_level=${loyaltyLevel}`,
+          });
+
+          if (!response.ok) {
+            const errorData = await response
+              .json()
+              .catch(() => ({ error: `Lỗi HTTP: ${response.status}` }));
+            throw new Error(errorData.error || `Lỗi HTTP: ${response.status}`);
+          }
+
+          const data = await response.json();
+
+          let resultHtml = `
+                    <strong>Trip ID:</strong> ${data.trip_id}<br>
+                    <strong>Loại xe:</strong> ${data.vehicle_type.capitalize()}<br>
+                    <strong>Khoảng cách:</strong> ${data.distance} km<br>
+                    <strong>Giá cơ bản:</strong> ${formatPrice(
+                      data.base_price
+                    )} VND<br>
+                    <strong>Giá cuối cùng:</strong> <strong style="font-size: 1.2em; color: #c0392b;">${formatPrice(
+                      data.final_price
+                    )} VND</strong><br>
+                    <strong>Lý do thay đổi giá:</strong> ${
+                      data.reasons.length > 0
+                        ? data.reasons.join(", ")
+                        : "Không có"
+                    }<br>
+                    <strong>Các yếu tố đã áp dụng:</strong>
+                    <pre>${JSON.stringify(data.used_factors, null, 2)}</pre>
+                `;
+          singleResultContent.innerHTML = resultHtml;
+        } catch (error) {
+          console.error("Lỗi khi test đơn lẻ:", error);
+          singleError.textContent = `Đã xảy ra lỗi: ${error.message}`;
+          singleResultContent.textContent = "Lỗi!";
+        } finally {
+          singleLoader.style.display = "none";
+          singleTestBtn.disabled = false;
+        }
+      });
+
+      // Helper function để capitalize (có thể bỏ nếu không cần)
+      String.prototype.capitalize = function () {
+        return this.charAt(0).toUpperCase() + this.slice(1);
+      };
+    </script>
+  </body>
+</html>
